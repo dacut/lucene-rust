@@ -1,5 +1,6 @@
 use {
-    crate::LuceneError,
+    byteorder::{LE},
+    crate::{BoxError, LuceneError, io::CodecReadExt},
     log::error,
     std::{
         fmt::{Display, Formatter, Result as FmtResult},
@@ -18,12 +19,12 @@ pub struct Version {
 }
 
 impl Version {
-    const fn new(major: u8, minor: u8, bugfix: u8, prerelease: u8) -> Self {
+    pub const fn new(major: u8, minor: u8, bugfix: u8) -> Self {
         Self {
             major,
             minor,
             bugfix,
-            prerelease,
+            prerelease: 0,
         }
     }
 
@@ -46,6 +47,43 @@ impl Version {
     pub fn prerelease(&self) -> u8 {
         self.prerelease
     }
+
+    /// Read a version from a stream as three vi32 values.
+    pub fn read_from_vi32<R: CodecReadExt>(r: &mut R) -> Result<Self, BoxError> {
+        let major = r.read_vi32()?;
+        let minor = r.read_vi32()?;
+        let bugfix = r.read_vi32()?;
+
+        if major < 0 || major > u8::MAX as i32 || minor < 0 || minor > u8::MAX as i32 || bugfix < 0 || bugfix > u8::MAX as i32 {
+            Err(LuceneError::InvalidVersionStreamData(major, minor, bugfix).into())
+        } else {
+            Ok(Self {
+                major: major as u8,
+                minor: minor as u8,
+                bugfix: bugfix as u8,
+                prerelease: 0,
+            })
+        }
+    }
+
+    /// Read a version from a stream as three i32 little-endian values.
+    pub fn read_from_i32_le<R: CodecReadExt>(r: &mut R) -> Result<Self, BoxError> {
+        let major = r.read_i32::<LE>()?;
+        let minor = r.read_i32::<LE>()?;
+        let bugfix = r.read_i32::<LE>()?;
+
+        if major < 0 || major > u8::MAX as i32 || minor < 0 || minor > u8::MAX as i32 || bugfix < 0 || bugfix > u8::MAX as i32 {
+            Err(LuceneError::InvalidVersionStreamData(major, minor, bugfix).into())
+        } else {
+            Ok(Self {
+                major: major as u8,
+                minor: minor as u8,
+                bugfix: bugfix as u8,
+                prerelease: 0,
+            })
+        }
+    }
+
 }
 
 impl From<Version> for u32 {
@@ -93,36 +131,36 @@ impl FromStr for Version {
             return Err(LuceneError::InvalidVersionString(s.to_string()));
         }
 
-        Ok(Self::new(major, minor, bugfix, prerelease))
+        Ok(Self { major, minor, bugfix, prerelease })
     }
 }
 
 /// Match settings and bugs in Lucene's 9.0.0 release.
-pub const LUCENE_9_0_0: Version = Version::new(9, 0, 0, 0);
+pub const LUCENE_9_0_0: Version = Version::new(9, 0, 0);
 
 /// Match settings and bugs in Lucene's 9.1.0 release.
-pub const LUCENE_9_1_0: Version = Version::new(9, 1, 0, 0);
+pub const LUCENE_9_1_0: Version = Version::new(9, 1, 0);
 
 /// Match settings and bugs in Lucene's 9.2.0 release.
-pub const LUCENE_9_2_0: Version = Version::new(9, 2, 0, 0);
+pub const LUCENE_9_2_0: Version = Version::new(9, 2, 0);
 
 /// Match settings and bugs in Lucene's 9.3.0 release.
-pub const LUCENE_9_3_0: Version = Version::new(9, 3, 0, 0);
+pub const LUCENE_9_3_0: Version = Version::new(9, 3, 0);
 
 /// Match settings and bugs in Lucene's 9.4.0 release.
-pub const LUCENE_9_4_0: Version = Version::new(9, 4, 0, 0);
+pub const LUCENE_9_4_0: Version = Version::new(9, 4, 0);
 
 /// Match settings and bugs in Lucene's 9.4.1 release.
-pub const LUCENE_9_4_1: Version = Version::new(9, 4, 1, 0);
+pub const LUCENE_9_4_1: Version = Version::new(9, 4, 1);
 
 /// Match settings and bugs in Lucene's 9.4.2 release.
-pub const LUCENE_9_4_2: Version = Version::new(9, 4, 2, 0);
+pub const LUCENE_9_4_2: Version = Version::new(9, 4, 2);
 
 /// Match settings and bugs in Lucene's 9.5.0 release.
-pub const LUCENE_9_5_0: Version = Version::new(9, 5, 0, 0);
+pub const LUCENE_9_5_0: Version = Version::new(9, 5, 0);
 
 /// The current version of Lucene.
 pub const LATEST: Version = LUCENE_9_5_0;
 
 /// The minimul supported version of an index.
-pub const MIN_SUPPORTED: Version = Version::new(8, 0, 0, 0);
+pub const MIN_SUPPORTED: Version = Version::new(8, 0, 0);
