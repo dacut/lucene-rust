@@ -1,6 +1,6 @@
-use crate::{
-    io::{CodecHeader, CodecReadExt},
-    BoxResult, Id, LuceneError,
+use {
+    crate::{codec::CodecHeader, BoxResult, Id, LuceneError},
+    tokio::io::AsyncRead,
 };
 
 /// A [CodecHeader] that has the magic bytes/name/version, followed by an id, followed by the suffix (name repeated).
@@ -11,16 +11,19 @@ pub struct IndexHeader {
 }
 
 impl IndexHeader {
+    /// The name of the codec used to encode the data.
     #[inline]
     pub fn codec(&self) -> &str {
         self.codec_header.codec()
     }
 
+    /// The version of the codec used to encode the data.
     #[inline]
     pub fn version(&self) -> u32 {
         self.codec_header.version()
     }
 
+    /// The id of the index.
     #[inline]
     pub fn id(&self) -> Id {
         self.id
@@ -28,7 +31,7 @@ impl IndexHeader {
 
     /// Reads and verifies that the index header has the correct magic bytes, the specified codec name, the version falls
     /// within the specified range, the id matches the specified id, and the suffix matches the codec name.
-    pub fn read_from<R: CodecReadExt>(
+    pub async fn read_from<R: AsyncRead + Unpin>(
         r: &mut R,
         codec: &str,
         min_version: u32,
@@ -36,8 +39,8 @@ impl IndexHeader {
         expected_id: Option<Id>,
         expected_suffix: &str,
     ) -> BoxResult<Self> {
-        let codec_header = CodecHeader::read(r, codec, min_version, max_version)?;
-        let id = Id::read_from(r)?;
+        let codec_header = CodecHeader::read(r, codec, min_version, max_version).await?;
+        let id = Id::read_from(r).await?;
 
         if let Some(expected_id) = expected_id {
             if id != expected_id {
@@ -48,7 +51,7 @@ impl IndexHeader {
             }
         }
 
-        codec_header.read_index_header_suffix(r, expected_suffix)?;
+        codec_header.read_index_header_suffix(r, expected_suffix).await?;
 
         Ok(Self {
             codec_header,

@@ -1,10 +1,27 @@
+//! Core Lucene functionality.
+
 #![warn(clippy::all)]
-pub mod codec;
+#![warn(rustdoc::missing_crate_level_docs)]
+#![warn(rustdoc::broken_intra_doc_links)]
+#![warn(missing_docs)]
+
 mod error;
 mod id;
-pub mod io;
-pub mod index;
-pub mod search;
 mod version;
 
-pub use {error::*, io::*, id::*, version::*};
+/// Codec related types and functionality.
+pub mod codec;
+
+/// Lucene index-on-disk types and functionality.
+pub mod fs;
+
+/// Generic Lucene I/O types.
+pub mod io;
+
+/// Lucene index (database) types.
+pub mod index;
+
+/// Lucene search types.
+pub mod search;
+
+pub use {error::*, id::*, io::*, version::*};

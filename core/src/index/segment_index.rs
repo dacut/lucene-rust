@@ -1,19 +1,13 @@
 use {
     crate::{
         codec::get_codec,
-        index::{MAX_DOCS, IndexHeader, SegmentCommitInfo},
-        io::{CodecReadExt, Crc32Reader},
+        index::{IndexHeader, SegmentCommitInfo, MAX_DOCS},
+        io::{Crc32Reader, Directory, EncodingReadExt},
         BoxResult, Id, LuceneError, Version,
     },
-    byteorder::{ReadBytesExt, BE},
     log::{debug, error},
-    std::{
-        collections::{HashMap},
-        ffi::OsString,
-        fs::{metadata, DirEntry, File, read_dir},
-        io::Result as IoResult,
-        path::Path,
-    },
+    std::collections::HashMap,
+    tokio::io::AsyncReadExt,
 };
 
 /// Index segment file name prefix.
@@ -36,6 +30,9 @@ const SEGMENT_INDEX_VERSION_CURRENT: u32 = SEGMENT_INDEX_VERSION_8_6;
 /// The name of the segment index codec.
 pub const SEGMENT_CODEC_NAME: &str = "segments";
 
+/// Information about a Lucene index. This is in the `segments_N` file.
+///
+/// In the Lucene Java implementation, this is called `SegmentInfos`.
 #[derive(Debug)]
 pub struct SegmentIndex {
     /// Used to name new segments.
@@ -65,71 +62,81 @@ pub struct SegmentIndex {
 
     /// The Lucene version major that was used to create the index.
     index_created_version_major: u8,
-    
 }
 
 impl SegmentIndex {
+    /// Returns the id of the segment index.
     #[inline]
     pub fn get_id(&self) -> Id {
         self.id
     }
 
+    /// Returns the Lucene version used to create the index.
     #[inline]
     pub fn get_lucene_version(&self) -> Version {
         self.lucene_version
     }
 
+    /// Returns the Lucene version major that was used to create the index.
     #[inline]
     pub fn get_index_created_version_major(&self) -> u8 {
         self.index_created_version_major
     }
 
+    /// Returns the generation of the "segments_N" file for the next commit.
     #[inline]
     pub fn get_generation(&self) -> u64 {
         self.generation
     }
 
+    /// Returns the generation of the "segments_N" file we last successfully read or wrote.
     #[inline]
     pub fn get_last_generation(&self) -> u64 {
         self.last_generation
     }
 
+    /// Counts how often the index has been changed.
     #[inline]
     pub fn get_version(&self) -> u64 {
         self.version
     }
 
+    /// Used to name new segments.
     #[inline]
     pub fn get_counter(&self) -> u64 {
         self.counter
     }
 
+    /// Opaque user data that is associated with the index.
     #[inline]
     pub fn get_user_data(&self) -> &HashMap<String, String> {
         &self.user_data
     }
 
+    /// Returns the segments of the index.
     #[inline]
     pub fn get_segments(&self) -> &[SegmentCommitInfo] {
         &self.segments
     }
 
     /// Open a segment index from the given directory.
-    pub fn fs_open<P: AsRef<Path>>(directory: P) -> BoxResult<Self> {
-        let dir_name = directory.as_ref();
-        let dir_result = read_dir(dir_name)?;
-        let Some((segment_index_file_name, generation)) = get_latest_segment_index_file_name_and_generation(dir_result)? else {
-            return Err(LuceneError::CorruptIndex(format!("No segment index file found in directory: {dir_name:?}")).into());
+    pub async fn open<D: Directory>(directory: &mut D) -> BoxResult<Self> {
+        let dir_entries = directory.read_dir().await?;
+        let Some((segment_index_file_name, generation)) = get_latest_segment_index_file_name_and_generation(&dir_entries)? else {
+            return Err(LuceneError::CorruptIndex(format!("No segment index file found in directory: {directory:?}")).into());
         };
 
-        let segment_index_path_name = dir_name.join(segment_index_file_name);
-        let segment_index_file = File::open(segment_index_path_name)?;
+        let segment_index_file = directory.open(&segment_index_file_name).await?;
         let mut segment_index_reader = Crc32Reader::new(segment_index_file);
-        Self::read_from(directory, &mut segment_index_reader, generation)
+        Self::read_from(directory, &mut segment_index_reader, generation).await
     }
 
     /// Read the segment index from the given reader.
-    pub fn read_from<P: AsRef<Path>, R: CodecReadExt>(directory: P, r: &mut Crc32Reader<R>, generation: u64) -> BoxResult<Self> {
+    pub async fn read_from<D: Directory, R: EncodingReadExt>(
+        directory: &mut D,
+        r: &mut Crc32Reader<R>,
+        generation: u64,
+    ) -> BoxResult<Self> {
         // From SegmentInfos#readCommit(Directory, ChecksumIndexInput, long, int)
         let gen_str = generation_to_string(generation);
         let index_header = IndexHeader::read_from(
@@ -139,13 +146,14 @@ impl SegmentIndex {
             SEGMENT_INDEX_VERSION_CURRENT,
             None,
             &gen_str,
-        )?;
+        )
+        .await?;
         let format = index_header.version();
 
-        let lucene_version = Version::read_from_vi32(r)?;
+        let lucene_version = Version::read_from_vi32(r).await?;
         debug!("SegmentIndex has Lucene version {lucene_version}");
 
-        let index_created_version_major = r.read_vi32()?;
+        let index_created_version_major = r.read_vi32().await?;
         debug!("SegmentIndex has index created version major {index_created_version_major}");
 
         if (lucene_version.major() as i32) < index_created_version_major {
@@ -160,15 +168,15 @@ impl SegmentIndex {
 
         // From SegmentInfos#parseSegmentInfos(Directory, DataInput, SegmentInfos, int)
 
-        let version = r.read_i64::<BE>()?;
+        let version = r.read_i64().await?;
         assert!(version >= 0);
         let version = version as u64;
 
-        let counter = r.read_vi64()?;
+        let counter = r.read_vi64().await?;
         assert!(counter >= 0);
         let counter = counter as u64;
 
-        let num_segments = r.read_i32::<BE>()?;
+        let num_segments = r.read_i32().await?;
         debug!("SegmentIndex has {num_segments} segments; version={version}, counter={counter}");
 
         if num_segments < 0 {
@@ -179,7 +187,7 @@ impl SegmentIndex {
         }
 
         let min_segment_lucene_version = if num_segments > 0 {
-            Some(Version::read_from_vi32(r)?)
+            Some(Version::read_from_vi32(r).await?)
         } else {
             None
         };
@@ -188,24 +196,24 @@ impl SegmentIndex {
         let mut segments = Vec::with_capacity(num_segments as usize);
 
         for seg in 0..num_segments as usize {
-            let seg_name = r.read_string()?;
-            let seg_id = Id::read_from(r)?;
-            let codec_name = r.read_string()?;
+            let seg_name = r.read_string().await?;
+            let seg_id = Id::read_from(r).await?;
+            let codec_name = r.read_string().await?;
 
             debug!("Segment {seg} has name {seg_name}, id {seg_id}, using codec {codec_name}");
 
             let codec = get_codec(&codec_name)?;
             let segment_info_format = codec.segment_info_format();
-            let segment_info = segment_info_format.read_segment_info(directory.as_ref(), &seg_name, seg_id)?;
-    
+            let segment_info = segment_info_format.read_segment_info(directory, &seg_name, seg_id).await?;
+
             let max_doc = segment_info.get_max_doc();
             total_docs += max_doc;
 
-            let del_gen = r.read_i64::<BE>()?;
-            let del_count = r.read_i32::<BE>()?;
-            let field_infos_gen = r.read_i64::<BE>()?;
-            let dv_gen = r.read_i64::<BE>()?;
-            let soft_del_count = r.read_i32::<BE>()?;
+            let del_gen = r.read_i64().await?;
+            let del_count = r.read_i32().await?;
+            let field_infos_gen = r.read_i64().await?;
+            let dv_gen = r.read_i64().await?;
+            let soft_del_count = r.read_i32().await?;
 
             debug!("Segment {seg_name} has max_doc={max_doc}, del_gen={del_gen}, del_count={del_count}, field_infos_gen={field_infos_gen}, dv_gen={dv_gen}, soft_del_count={soft_del_count}");
 
@@ -261,8 +269,8 @@ impl SegmentIndex {
             }
 
             let sci_id = if format > SEGMENT_INDEX_VERSION_7_4 {
-                match r.read_u8()? {
-                    1 => Some(Id::read_from(r)?),
+                match r.read_u8().await? {
+                    1 => Some(Id::read_from(r).await?),
                     0 => None,
                     other => {
                         return Err(LuceneError::CorruptIndex(format!(
@@ -285,13 +293,13 @@ impl SegmentIndex {
                 sci_id,
             );
 
-            si_per_commit.set_field_infos_files(r.read_string_set()?);
-            let n_dv_fields = r.read_i32::<BE>()?;
+            si_per_commit.set_field_infos_files(r.read_string_set().await?);
+            let n_dv_fields = r.read_i32().await?;
             if n_dv_fields > 0 {
                 let mut dv_fields = HashMap::new();
                 for _ in 0..n_dv_fields {
-                    let key = r.read_i32::<BE>()?;
-                    let values = r.read_string_set()?;
+                    let key = r.read_i32().await?;
+                    let values = r.read_string_set().await?;
                     dv_fields.insert(key, values);
                 }
 
@@ -303,7 +311,8 @@ impl SegmentIndex {
             // We guarantee that min_segment_lucene_version is not None because num_segments > 0
             if segment_version < min_segment_lucene_version.unwrap() {
                 return Err(LuceneError::CorruptIndex(format!(
-                    "Segment index has segment version {segment_version} less than min segment version {}", min_segment_lucene_version.unwrap()
+                    "Segment index has segment version {segment_version} less than min segment version {}",
+                    min_segment_lucene_version.unwrap()
                 ))
                 .into());
             }
@@ -320,7 +329,7 @@ impl SegmentIndex {
             segments.push(si_per_commit);
         }
 
-        let user_data = r.read_string_map()?;
+        let user_data = r.read_string_map().await?;
 
         let segment_index = Self {
             id: index_header.id(),
@@ -331,7 +340,7 @@ impl SegmentIndex {
             version,
             counter,
             user_data,
-            segments
+            segments,
         };
 
         if total_docs > MAX_DOCS {
@@ -343,69 +352,49 @@ impl SegmentIndex {
 }
 
 /// Get the latest index segment file and its generation of the most recent commit.
-pub fn get_latest_segment_index_file_name_and_generation<T: Iterator<Item = IoResult<DirEntry>>>(
-    files: T,
-) -> BoxResult<Option<(OsString, u64)>> {
+pub fn get_latest_segment_index_file_name_and_generation<T: AsRef<str>>(
+    files: &[T],
+) -> BoxResult<Option<(String, u64)>> {
     let mut result = None;
 
-    for entry_result in files {
-        let entry = entry_result?;
-        let file_name_os = entry.file_name();
-        let Some(file_name) = file_name_os.to_str() else {
-            error!("Failed to convert file name {:?} to string", file_name_os);
-            continue;
-        };
+    for file_name in files {
+        let file_name = file_name.as_ref();
 
         // Ignore files whose name doesn't start with "segments".
         let Some(suffix) = file_name.strip_prefix(INDEX_SEGMENT_FILE_NAME_PREFIX) else {
-            debug!("File {file_name_os:?} doesn't start with {INDEX_SEGMENT_FILE_NAME_PREFIX:?}, skipping");
+            debug!("File {file_name:?} doesn't start with {INDEX_SEGMENT_FILE_NAME_PREFIX:?}, skipping");
             continue;
         };
-
-        // Not in Java: make sure this is a regular file.
-        // Don't use entry.file_type here; it doesn't follow symlinks.
-        let entry_metadata = match metadata(entry.path()) {
-            Ok(md) => md,
-            Err(e) => {
-                error!("Failed to get metadata for file {:?}: {e}", entry.path());
-                continue;
-            }
-        };
-
-        if !entry_metadata.is_file() {
-            error!("File {:?} is not a regular file", entry.path());
-            continue;
-        }
 
         if suffix == PRE_40_INDEX_SEGMENT_FILE_NAME_SUFFIX {
             return Err(LuceneError::UnsupportedLuceneVersion(format!(
                 "Index segment file {:?} is unsupported version from pre-4.0",
-                entry.path()
+                file_name
             ))
             .into());
         }
 
         let this_generation = if suffix.is_empty() {
-            debug!("File {file_name_os:?} has no generation suffix, using 0");
+            debug!("File {file_name:?} has no generation suffix, using 0");
             0
         } else {
             let Ok(generation) = suffix[1..].parse::<u64>() else {
                 error!("Failed to parse generation from file name {:?}", file_name);
                 continue;
             };
-            debug!("File {file_name_os:?} has generation {generation}");
+            debug!("File {file_name:?} has generation {generation}");
             generation
         };
 
         result = match result {
             None => {
-                debug!("No previous result; setting to {file_name_os:?} with generation {this_generation}");
-                Some((file_name_os, this_generation))
+                debug!("No previous result; setting to {file_name:?} with generation {this_generation}");
+                Some((file_name.to_string(), this_generation))
             }
             Some((cur_highest_file_name, cur_highest_generation)) => {
                 if this_generation > cur_highest_generation {
-                    debug!("New generation {this_generation} is higher than current highest generation {cur_highest_generation}; setting to {file_name_os:?} with generation {this_generation}");
-                    Some((file_name_os, this_generation))
+                    debug!("New generation {this_generation} is higher than current highest generation {cur_highest_generation}; setting to {file_name:?} with generation {this_generation}");
+                    Some((file_name.to_string(), this_generation))
                 } else {
                     debug!("New generation {this_generation} is lower than current highest generation {cur_highest_generation}; keeping {cur_highest_file_name:?} with generation {cur_highest_generation}");
                     Some((cur_highest_file_name, cur_highest_generation))

@@ -1,11 +1,11 @@
 use {
-    byteorder::{LE},
-    crate::{BoxError, LuceneError, io::CodecReadExt},
+    crate::{io::EncodingReadExt, BoxError, LuceneError},
     log::error,
     std::{
         fmt::{Display, Formatter, Result as FmtResult},
         str::FromStr,
     },
+    tokio::io::{AsyncRead, AsyncReadExt},
 };
 
 /// Version numbers of Lucene. This is used to ensure compatibility across different releases.
@@ -19,6 +19,7 @@ pub struct Version {
 }
 
 impl Version {
+    /// Create a new `Version` structure from the given major, minor, and bugfix numbers.
     pub const fn new(major: u8, minor: u8, bugfix: u8) -> Self {
         Self {
             major,
@@ -28,33 +29,43 @@ impl Version {
         }
     }
 
+    /// Returns the major version number.
     #[inline]
     pub fn major(&self) -> u8 {
         self.major
     }
 
+    /// Returns the minor version number.
     #[inline]
     pub fn minor(&self) -> u8 {
         self.minor
     }
 
+    /// Returns the bugfix version number.
     #[inline]
     pub fn bugfix(&self) -> u8 {
         self.bugfix
     }
 
+    /// Returns the prerelease version number.
     #[inline]
     pub fn prerelease(&self) -> u8 {
         self.prerelease
     }
 
     /// Read a version from a stream as three vi32 values.
-    pub fn read_from_vi32<R: CodecReadExt>(r: &mut R) -> Result<Self, BoxError> {
-        let major = r.read_vi32()?;
-        let minor = r.read_vi32()?;
-        let bugfix = r.read_vi32()?;
+    pub async fn read_from_vi32<R: AsyncRead + Unpin>(r: &mut R) -> Result<Self, BoxError> {
+        let major = r.read_vi32().await?;
+        let minor = r.read_vi32().await?;
+        let bugfix = r.read_vi32().await?;
 
-        if major < 0 || major > u8::MAX as i32 || minor < 0 || minor > u8::MAX as i32 || bugfix < 0 || bugfix > u8::MAX as i32 {
+        if major < 0
+            || major > u8::MAX as i32
+            || minor < 0
+            || minor > u8::MAX as i32
+            || bugfix < 0
+            || bugfix > u8::MAX as i32
+        {
             Err(LuceneError::InvalidVersionStreamData(major, minor, bugfix).into())
         } else {
             Ok(Self {
@@ -67,12 +78,18 @@ impl Version {
     }
 
     /// Read a version from a stream as three i32 little-endian values.
-    pub fn read_from_i32_le<R: CodecReadExt>(r: &mut R) -> Result<Self, BoxError> {
-        let major = r.read_i32::<LE>()?;
-        let minor = r.read_i32::<LE>()?;
-        let bugfix = r.read_i32::<LE>()?;
+    pub async fn read_from_i32_le<R: AsyncRead + Unpin>(r: &mut R) -> Result<Self, BoxError> {
+        let major = r.read_i32_le().await?;
+        let minor = r.read_i32_le().await?;
+        let bugfix = r.read_i32_le().await?;
 
-        if major < 0 || major > u8::MAX as i32 || minor < 0 || minor > u8::MAX as i32 || bugfix < 0 || bugfix > u8::MAX as i32 {
+        if major < 0
+            || major > u8::MAX as i32
+            || minor < 0
+            || minor > u8::MAX as i32
+            || bugfix < 0
+            || bugfix > u8::MAX as i32
+        {
             Err(LuceneError::InvalidVersionStreamData(major, minor, bugfix).into())
         } else {
             Ok(Self {
@@ -83,12 +100,14 @@ impl Version {
             })
         }
     }
-
 }
 
 impl From<Version> for u32 {
     fn from(version: Version) -> Self {
-        (version.major as u32) << 24 | (version.minor as u32) << 16 | (version.bugfix as u32) << 8 | version.prerelease as u32
+        (version.major as u32) << 24
+            | (version.minor as u32) << 16
+            | (version.bugfix as u32) << 8
+            | version.prerelease as u32
     }
 }
 
@@ -131,7 +150,12 @@ impl FromStr for Version {
             return Err(LuceneError::InvalidVersionString(s.to_string()));
         }
 
-        Ok(Self { major, minor, bugfix, prerelease })
+        Ok(Self {
+            major,
+            minor,
+            bugfix,
+            prerelease,
+        })
     }
 }
 

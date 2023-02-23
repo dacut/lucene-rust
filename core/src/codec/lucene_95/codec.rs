@@ -1,4 +1,4 @@
-use {crate::codec::{Codec, SegmentInfoFormat, Lucene90SegmentInfoFormat}};
+use crate::codec::{Codec, Lucene90SegmentInfoFormat, SegmentInfoFormat};
 
 #[derive(Debug)]
 pub struct Lucene95Codec {}

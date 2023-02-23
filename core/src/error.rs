@@ -1,26 +1,54 @@
 use {
-    crate::{index::MAX_DOCS, io::CODEC_MAGIC},
+    crate::{codec::CODEC_MAGIC, index::MAX_DOCS},
     std::{
         error::Error,
         fmt::{Display, Formatter, Result as FmtResult},
     },
 };
 
+/// Errors that can occur in Lucene.
 #[derive(Debug)]
 pub enum LuceneError {
+    /// The index is corrupt.
     CorruptIndex(String),
-    IncorrectCodecName(Vec<u8>, String),
+
+    /// The codec name in the index is incorrect and was expected to be something else.
+    IncorrectCodecName(Vec<u8> /* name */, String /* expected */),
+
+    /// A codec name was invalid (not a valid ASCII string under 128 bytes).
     InvalidCodecName(String),
+
+    /// The codec header magic bytes were incorrect.
     InvalidCodecHeaderMagic([u8; 4]),
-    InvalidSortField(String),
+
+    /// A sort field specification was invalid.
+    InvalidSortField(String /* message */),
+
+    /// A version string was invalid.
     InvalidVersionString(String),
+
+    /// A version number in a stream was invalid.
     InvalidVersionStreamData(i32, i32, i32),
+
+    /// A sort field was missing.
     MissingSortDirectives,
-    TooManyDocs(u64),
-    UnknownCodec(String),
+
+    /// Too many documents (beyond [crate::index::MAX_DOCS]) were encountered.
+    TooManyDocs(u64 /* actual */),
+
+    /// A codec was unknown.
+    UnknownCodec(String /* requested */),
+
+    /// A sort field provider was unknown.
     UnknownSortFieldProvider(String),
+
+    /// A sort field type was unknown.
     UnknownSortFieldType(String),
+
+    /// A given codec version is unsupported.
     UnsupportedCodecVersion(String, u32, u32, u32),
+
+    /// The Lucene version of the data is unsupported.
     UnsupportedLuceneVersion(String),
 }
 
@@ -62,6 +90,8 @@ impl Display for LuceneError {
 
 impl Error for LuceneError {}
 
+/// A type alias for any kind of error. The error is boxed and must be `Send`, `Sync`, and `'static`.
 pub type BoxError = Box<dyn Error + Send + Sync + 'static>;
 
+/// A type alias for a `Result` with a [BoxError].
 pub type BoxResult<T> = Result<T, BoxError>;

@@ -2,8 +2,9 @@ use {
     rand::{rngs::StdRng, RngCore, SeedableRng},
     std::{
         fmt::{Debug, Display, Formatter, Result as FmtResult},
-        io::{Read, Result as IoResult},
+        io::Result as IoResult,
     },
+    tokio::io::{AsyncRead, AsyncReadExt},
 };
 
 /// The length of identifiers.
@@ -44,9 +45,9 @@ impl Id {
     }
 
     /// Read an id from a stream. Returns the id.
-    pub fn read_from<R: Read>(r: &mut R) -> IoResult<Self> {
+    pub async fn read_from<R: AsyncRead + Unpin>(r: &mut R) -> IoResult<Self> {
         let mut id = [0u8; ID_LENGTH];
-        r.read_exact(&mut id)?;
+        r.read_exact(&mut id).await?;
         Ok(Self {
             id,
         })

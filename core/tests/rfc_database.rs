@@ -1,11 +1,16 @@
-use {lucene_core::index::*, std::{collections::HashSet, path::PathBuf}, test_log::test};
+use {
+    lucene_core::{fs::FilesystemDirectory, index::*},
+    std::{collections::HashSet, path::PathBuf},
+};
 
-#[test]
-fn read_rfc_database() {
+#[test_log::test(tokio::test)]
+async fn read_rfc_database() {
     let mut db_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     db_dir.push("tests");
     db_dir.push("rfc-database");
-    let si = SegmentIndex::fs_open(&db_dir).unwrap();
+    let mut dir = FilesystemDirectory::open(db_dir).await.unwrap();
+    let si = SegmentIndex::open(&mut dir).await.unwrap();
+
     assert_eq!(si.get_version(), 28);
     assert_eq!(si.get_generation(), 1);
     assert_eq!(si.get_last_generation(), 1);
@@ -22,7 +27,20 @@ fn read_rfc_database() {
     const TIMESTAMPS: [&str; 3] = ["1676593179395", "1676593196078", "1676593196110"];
     const FILES_0: [&str; 3] = ["_0.cfe", "_0.si", "_0.cfs"];
     const FILES_1: [&str; 3] = ["_b.cfe", "_b.si", "_b.cfs"];
-    const FILES_2: [&str; 12] = ["_c.fdm", "_c.si", "_c.fdt", "_c_Lucene90_0.tip", "_c_Lucene90_0.pos", "_c.nvd", "_c.fdx", "_c_Lucene90_0.doc", "_c_Lucene90_0.tim", "_c_Lucene90_0.tmd", "_c.nvm", "_c.fnm"];
+    const FILES_2: [&str; 12] = [
+        "_c.fdm",
+        "_c.si",
+        "_c.fdt",
+        "_c_Lucene90_0.tip",
+        "_c_Lucene90_0.pos",
+        "_c.nvd",
+        "_c.fdx",
+        "_c_Lucene90_0.doc",
+        "_c_Lucene90_0.tim",
+        "_c_Lucene90_0.tmd",
+        "_c.nvm",
+        "_c.fnm",
+    ];
     const FILES: [&[&str]; 3] = [&FILES_0, &FILES_1, &FILES_2];
 
     for sci in si.get_segments() {
